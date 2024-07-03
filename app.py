@@ -20,7 +20,7 @@ cors = CORS(app) #Cross Origin Resource Sharing - allows external applications t
 app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+mysqlconnector://root:Emilyalice1001@localhost/e_commerce_db2"
 app.json.sort_keys = False #turns key sorting off, fields will maintain order set in schema
 
-# creating a Base class that inherits the DelcarativeBase from sqlalchemy.orm
+# creating a Base class that inherits the DeclarativeBase from sqlalchemy.orm
 # provides functionality for creating python classes that will become tables
 # in our database
 # ALL classes we create will inherit from the Base class
@@ -106,9 +106,6 @@ customers_schema = CustomerSchema(many=True)
 
 
 
-
-
-
 @app.route('/')
 def home():
     return "I AM ALIIIIIVE"
@@ -161,7 +158,7 @@ def updated_customer(customer_id):
             customer = result #naming the customer variable that we're working with
             # customer object
             try:
-                customer_data = customer_schema.load(request.json)
+                customer_data = customer_schema.load(request.json, partial=True)
             except ValidationError as err:
                 return jsonify(err.messages), 400
             
@@ -273,10 +270,11 @@ class OrderSchema(ma.Schema):
     order_id = fields.Integer(required=False)
     customer_id = fields.Integer(required=False)
     date = fields.Date(required=True)
-    product_id = fields.List(fields.Integer())
+    product_ids = fields.List(fields.Integer())
+    
 
     class Meta:
-        fields = ("order_id", "customer_id", "date", "product_id")
+        fields = ("order_id", "customer_id", "date", "product_ids")
 
 order_schema = OrderSchema()
 orders_schema = OrderSchema(many=True)
@@ -291,7 +289,11 @@ def add_order():
     with Session(db.engine) as session:
         with session.begin():
             new_order = Order(customer_id=order_data['customer_id'], date = order_data['date'])
-
+            session.flush()
+            for product_id in order_data["product_ids"]:
+                query = select(Product).filter(Product.product_id==product_id)
+                result = session.execute(query).scalar()
+                new_order.products.append(result)
             session.add(new_order)
             session.commit()
 
@@ -303,6 +305,23 @@ def get_orders():
     result = db.session.execute(query).scalars()
     return orders_schema.jsonify(result)
 
+@app.route("/orders/<int:order_id>", methods=["GET"])
+def get_order_by_id(order_id):
+    with Session(db.engine) as session:
+        with session.begin():
+            query = select(Order).filter(Order.order_id==order_id)
+            order = session.execute(query).scalar() #first result object
+            if order is None:
+                return jsonify({"message": "Order Not Found"}), 404
+            data ={
+                "order_id": order_id,
+                "customer_id": order.customer_id,
+                "date": order.date,
+                "product_ids": [product.product_id for product in order.products]
+            }
+            return order_schema.jsonify(data)
+
+
 @app.route("/orders/<int:order_id>", methods=["PUT"])
 def update_order(order_id):
     with Session(db.engine) as session:
@@ -310,7 +329,7 @@ def update_order(order_id):
             query = select(Order).filter(Order.order_id==order_id)
             result = session.execute(query).scalar() #first result object
             if result is None:
-                return jsonify({"message": "Product Not Found"}), 404
+                return jsonify({"message": "Order Not Found"}), 404
             order = result
             try:
                 order_data = order_schema.load(request.json)
